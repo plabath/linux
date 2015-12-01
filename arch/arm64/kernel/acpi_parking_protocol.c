@@ -20,6 +20,10 @@
 #include <linux/types.h>
 
 #include <asm/cpu_ops.h>
+#include <asm/kexec.h>
+#include <asm/mmu_context.h>
+
+#include "cpu-park.h"
 
 struct parking_protocol_mailbox {
 	__le32 cpu_id;
@@ -132,10 +136,43 @@ static void acpi_parking_protocol_cpu_postboot(void)
 	WARN_ON(entry_point);
 }
 
+#ifdef CONFIG_HOTPLUG_CPU
+static int acpi_parking_protocol_cpu_disable(unsigned int cpu)
+{
+	struct cpu_mailbox_entry *cpu_entry = &cpu_mailbox_entries[cpu];
+
+	if (!cpu_entry->mailbox_addr)
+		return -EOPNOTSUPP;
+
+	return 0;
+}
+static void acpi_parking_protocol_cpu_die(unsigned int cpu)
+{
+	struct cpu_mailbox_entry *cpu_entry = &cpu_mailbox_entries[cpu];
+	unsigned int entry_offset =
+		offsetof(struct parking_protocol_mailbox, entry_point);
+
+	cpu_install_idmap();
+#ifdef CONFIG_KEXEC
+	cpu_park(in_crash_kexec ? 0 : is_hyp_mode_available(),
+			cpu_entry->mailbox_addr + entry_offset);
+#else
+	cpu_park(is_hyp_mode_available(),
+			cpu_entry->mailbox_addr + entry_offset);
+#endif
+
+	pr_crit("unable to power off CPU%u\n", cpu);
+}
+#endif
+
 const struct cpu_operations acpi_parking_protocol_ops = {
 	.name		= "parking-protocol",
 	.cpu_init	= acpi_parking_protocol_cpu_init,
 	.cpu_prepare	= acpi_parking_protocol_cpu_prepare,
 	.cpu_boot	= acpi_parking_protocol_cpu_boot,
-	.cpu_postboot	= acpi_parking_protocol_cpu_postboot
+	.cpu_postboot	= acpi_parking_protocol_cpu_postboot,
+#ifdef CONFIG_HOTPLUG_CPU
+	.cpu_disable	= acpi_parking_protocol_cpu_disable,
+	.cpu_die	= acpi_parking_protocol_cpu_die,
+#endif
 };
